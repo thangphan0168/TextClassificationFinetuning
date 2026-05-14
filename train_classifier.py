@@ -200,10 +200,6 @@ def main():
         predictions = np.argmax(logits, axis=-1)
         return {"accuracy": accuracy_score(labels, predictions)}
 
-    num_training_steps = math.ceil(args.epochs * len(train_split) / args.train_batch_size)
-    lr_scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps,
-        num_training_steps=num_training_steps)
-
     training_args = TrainingArguments(
         output_dir=args.output_dir,
         eval_strategy="steps",
@@ -221,6 +217,8 @@ def main():
         fp16=torch.cuda.is_available(),
         run_name=args.run_name,
         report_to=args.report_to,
+        lr_scheduler_type="cosine",
+        warmup_steps=args.warmup_steps
     )
 
     callbacks: list[TrainerCallback] = [LRCallback()]
@@ -233,7 +231,7 @@ def main():
         train_dataset=train_split,
         eval_dataset=eval_split,
         compute_metrics=compute_metrics,
-        optimizers=(optimizer, lr_scheduler),
+        optimizers=(optimizer, None),
         data_collator=data_collator,
         callbacks=callbacks
     )
