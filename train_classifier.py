@@ -72,15 +72,21 @@ def parse_args():
     p.add_argument("--warmup_steps", type=int, default=0,
                    help="Warmup steps (default: 0)")
     
-    # Output
+    # Output and logging
     p.add_argument("--output_dir", default="./results",
                    help="Directory to save the model (default: ./results)")
     p.add_argument("--logging_dir", default="./logs",
                    help="Directory for training logs (default: ./logs)")
-    p.add_argument("--logging_steps", type=int, default=50,
-                   help="Log every N steps (default: 50)")
+    p.add_argument("--logging_steps", type=int, default=1,
+                   help="Log every N steps (default: 1)")
     p.add_argument("--report_to", default="none",
                    help="Tracking backend: none | wandb | (default: none)")
+    p.add_argument("--eval_steps", type=int, default=500,
+                   help="Eval every N steps (default: 500)")
+    p.add_argument("--save_steps", type=int, default=500,
+                   help="Save every N steps (default: 500)")
+    p.add_argument("--save_total_limit", type=int, default=3,
+                   help="Total number of checkpoints to save (default: 3)")
     
     # Wandb setting
     p.add_argument("--run_name", default=None,
@@ -180,6 +186,9 @@ def main():
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.train_batch_size,
         per_device_eval_batch_size=args.eval_batch_size,
+        eval_steps=args.eval_steps,
+        save_steps=args.save_steps,
+        save_total_limit=args.save_total_limit,
         load_best_model_at_end=True,
         metric_for_best_model="accuracy",
         logging_dir=args.logging_dir,
