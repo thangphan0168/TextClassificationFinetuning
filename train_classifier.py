@@ -9,6 +9,12 @@ python train_classifier.py \
     --val_file val.csv \
     --text_col review \
     --num_labels 5
+
+# Freeze the backbone (only train the classification head)
+python train_classifier.py \
+    --train_file train.csv \
+    --val_file val.csv \
+    --freeze_backbone
 """
 
 import argparse
@@ -66,12 +72,14 @@ def parse_args():
     p.add_argument("--eval_batch_size", type=int, default=8,
                    help="Per-device eval batch size (default: 8)")
     p.add_argument("--backbone_lr", type=float, default=1e-5,
-                   help="Learning rate (default: 1e-5)")
+                   help="Learning rate for backbone (default: 1e-5); ignored when --freeze_backbone is set")
     p.add_argument("--head_lr", type=float, default=5e-5,
-                   help="Learning rate (default: 5e-5)")
+                   help="Learning rate for classification head (default: 5e-5)")
     p.add_argument("--warmup_steps", type=int, default=0,
                    help="Warmup steps (default: 0)")
-    
+    p.add_argument("--freeze_backbone", action="store_true",
+                   help="Freeze all backbone weights and train only the classification head")
+
     # Output and logging
     p.add_argument("--output_dir", default="./results",
                    help="Directory to save the model (default: ./results)")
@@ -126,11 +134,19 @@ class LRCallback(TrainerCallback):
         self.optimizer = kwargs.get("optimizer", None)
     
     def on_log(self, args, state, control, logs=None, **kwargs):
-        if logs is not None:
-            optimizer = kwargs.get("optimizer")
-            if optimizer:
-                logs["lr/backbone"] = optimizer.param_groups[0]["lr"]
-                logs["lr/head"]     = optimizer.param_groups[1]["lr"]
+        if logs is not None and self.optimizer is not None:
+            logs["lr/head"] = self.optimizer.param_groups[0]["lr"]
+            if len(self.optimizer.param_groups) > 1:
+                logs["lr/backbone"] = self.optimizer.param_groups[1]["lr"]
+
+
+def freeze_backbone(model) -> int:
+    """Freeze all backbone parameters and return the count of frozen params."""
+    frozen = 0
+    for param in model.base_model.parameters():
+        param.requires_grad = False
+        frozen += param.numel()
+    return frozen
 
 
 def main():
@@ -145,6 +161,7 @@ def main():
     print(f"  Model      : {args.model}")
     print(f"  Labels     : {args.num_labels}")
     print(f"  Epochs     : {args.epochs}")
+    print(f"  Freeze backbone: {args.freeze_backbone}")
     print(f"  Output dir : {args.output_dir}")
     print(f"{'='*60}\n")
 
@@ -165,15 +182,23 @@ def main():
         num_labels=args.num_labels,
     )
 
+    if args.freeze_backbone:
+        frozen_count = freeze_backbone(model)
+        print(f"Backbone frozen: {frozen_count:,} parameters will not be updated.\n")
+        optimizer = torch.optim.AdamW(
+            model.classifier.parameters(),
+            lr=args.head_lr,
+        )
+    else:
+        optimizer = torch.optim.AdamW([
+            {"params": model.classifier.parameters(), "lr": args.head_lr},
+            {"params": model.base_model.parameters(), "lr": args.backbone_lr},
+        ])
+
     def compute_metrics(eval_pred):
         logits, labels = eval_pred
         predictions = np.argmax(logits, axis=-1)
         return {"accuracy": accuracy_score(labels, predictions)}
-    
-    optimizer = torch.optim.AdamW([
-        {"params": model.base_model.parameters(), "lr": args.backbone_lr},
-        {"params": model.classifier.parameters(), "lr": args.head_lr},
-    ])
 
     num_training_steps = math.ceil(args.epochs * len(train_split) / args.train_batch_size)
     lr_scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps,
