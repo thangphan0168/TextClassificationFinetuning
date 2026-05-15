@@ -48,9 +48,11 @@ def parse_args():
 
     # Dataset
     p.add_argument("--train_file", default=None, required=True,
-                   help="Path to a local training CSV file")
+                   help="Path to a local training file")
     p.add_argument("--val_file", default=None, required=True,
-                   help="Path to a local validation CSV file")
+                   help="Path to a local validation file")
+    p.add_argument("--file_type", default="csv", required=False,
+                   help="File type: csv | parquet (default: csv)")
 
     # Columns
     p.add_argument("--text_col", default="text",
@@ -163,7 +165,7 @@ def main():
     data_files = {"train": args.train_file}
     if args.val_file:
         data_files["validation"] = args.val_file
-    dataset = load_dataset("csv", data_files=data_files)
+    dataset = load_dataset(args.file_type, data_files=data_files)
     print(f"Splits available: {list(dataset.keys())}\n")
 
     tokenizer = AutoTokenizer.from_pretrained(args.model)
