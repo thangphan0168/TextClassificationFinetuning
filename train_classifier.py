@@ -101,8 +101,6 @@ def parse_args():
                    help="Experiment/run name for the logger (e.g., W&B)")
     p.add_argument("--wandb_project", default=None,
                    help="W&B project name (optional; or set WANDB_PROJECT env var)")
-    p.add_argument("--wandb_entity", default=None,
-                   help="W&B entity/team (optional; or set WANDB_ENTITY env var)")
 
     return p.parse_args()
 
@@ -129,15 +127,13 @@ class TextDataset(torch.utils.data.Dataset):
         return encoding
 
 
-class LRCallback(TrainerCallback):
-    def on_train_begin(self, args, state, control, **kwargs):
-        self.optimizer = kwargs.get("optimizer", None)
-    
-    def on_log(self, args, state, control, logs=None, **kwargs):
-        if logs is not None and self.optimizer is not None:
+class CustomTrainer(Trainer):
+    def log(self, logs, start_time=None):
+        if self.optimizer is not None and isinstance(self.optimizer, torch.optim.Optimizer):
             logs["lr/head"] = self.optimizer.param_groups[0]["lr"]
             if len(self.optimizer.param_groups) > 1:
                 logs["lr/backbone"] = self.optimizer.param_groups[1]["lr"]
+        super().log(logs, start_time=start_time)
 
 
 def freeze_backbone(model) -> int:
@@ -154,8 +150,6 @@ def main():
     if args.report_to == "wandb":
         if args.wandb_project:
             os.environ["WANDB_PROJECT"] = args.wandb_project
-        if args.wandb_entity:
-            os.environ["WANDB_ENTITY"] = args.wandb_entity
 
     print(f"\n{'='*60}")
     print(f"  Model      : {args.model}")
@@ -220,20 +214,15 @@ def main():
         lr_scheduler_type="cosine",
         warmup_steps=args.warmup_steps
     )
-
-    callbacks: list[TrainerCallback] = [LRCallback()]
-    if args.report_to == "wandb":
-        callbacks.append(WandbCallback())
     
-    trainer = Trainer(
+    trainer = CustomTrainer(
         model=model,
         args=training_args,
         train_dataset=train_split,
         eval_dataset=eval_split,
         compute_metrics=compute_metrics,
         optimizers=(optimizer, None),
-        data_collator=data_collator,
-        callbacks=callbacks
+        data_collator=data_collator
     )
 
     trainer.train()
