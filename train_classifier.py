@@ -33,6 +33,7 @@ from transformers import (
     TrainingArguments,
     Trainer
 )
+from transformers.trainer_callback import PrinterCallback
 
 
 def parse_args():
@@ -133,6 +134,7 @@ class CustomTrainer(Trainer):
     def __init__(self, *args, console_logging_steps=50, **kwargs):
         super().__init__(*args, **kwargs)
         self.console_logging_steps = console_logging_steps
+        self.remove_callback(PrinterCallback)  # add this line
 
     def log(self, logs, start_time=None):
         if self.optimizer is not None and isinstance(self.optimizer, torch.optim.Optimizer):
@@ -143,14 +145,15 @@ class CustomTrainer(Trainer):
         step = self.state.global_step
         is_eval_log = any(k.startswith("eval_") for k in logs)
 
+        # W&B still gets every step via its own callback
+        super().log(logs, start_time=start_time)
+
+        # Console only at throttled frequency, but always for eval
         if is_eval_log or step % self.console_logging_steps == 0:
-            super().log(logs, start_time=start_time)
-        else:
-            logger = logging.getLogger("transformers.trainer")
-            original_level = logger.level
-            logger.setLevel(logging.WARNING)
-            super().log(logs, start_time=start_time)
-            logger.setLevel(original_level)
+            print(f"[step {step}] " + " | ".join(
+                f"{k}: {v:.4f}" if isinstance(v, float) else f"{k}: {v}"
+                for k, v in logs.items()
+            ))
 
 
 def freeze_backbone(model) -> int:
@@ -254,7 +257,7 @@ def main():
         print(f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}")
 
     if args.report_to == "wandb":
-        wandb.config.update(vars(args))
+        wandb.config.update(vars(args), allow_val_change=True)
 
 if __name__ == "__main__":
     main()
