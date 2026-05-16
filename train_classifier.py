@@ -18,11 +18,12 @@ python train_classifier.py \
 """
 
 import argparse
-import math
 import os
+import logging
 
 import numpy as np
 import torch
+import wandb
 from datasets import load_dataset
 from sklearn.metrics import accuracy_score
 from transformers import (
@@ -30,11 +31,8 @@ from transformers import (
     AutoModelForSequenceClassification,
     DataCollatorWithPadding,
     TrainingArguments,
-    Trainer,
-    TrainerCallback,
-    get_cosine_schedule_with_warmup
+    Trainer
 )
-from transformers.integrations.integration_utils import WandbCallback
 
 
 def parse_args():
@@ -89,6 +87,8 @@ def parse_args():
                    help="Directory for training logs (default: ./logs)")
     p.add_argument("--logging_steps", type=int, default=1,
                    help="Log every N steps (default: 1)")
+    p.add_argument("--console_logging_steps", type=int, default=50,
+               help="Log training steps to console every N steps (default: 50). Eval logs always print.")
     p.add_argument("--report_to", default="none",
                    help="Tracking backend: none | wandb | (default: none)")
     p.add_argument("--eval_steps", type=int, default=500,
@@ -130,12 +130,27 @@ class TextDataset(torch.utils.data.Dataset):
 
 
 class CustomTrainer(Trainer):
+    def __init__(self, *args, console_logging_steps=50, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.console_logging_steps = console_logging_steps
+
     def log(self, logs, start_time=None):
         if self.optimizer is not None and isinstance(self.optimizer, torch.optim.Optimizer):
             logs["lr/head"] = self.optimizer.param_groups[0]["lr"]
             if len(self.optimizer.param_groups) > 1:
                 logs["lr/backbone"] = self.optimizer.param_groups[1]["lr"]
-        super().log(logs, start_time=start_time)
+
+        step = self.state.global_step
+        is_eval_log = any(k.startswith("eval_") for k in logs)
+
+        if is_eval_log or step % self.console_logging_steps == 0:
+            super().log(logs, start_time=start_time)
+        else:
+            logger = logging.getLogger("transformers.trainer")
+            original_level = logger.level
+            logger.setLevel(logging.WARNING)
+            super().log(logs, start_time=start_time)
+            logger.setLevel(original_level)
 
 
 def freeze_backbone(model) -> int:
@@ -224,7 +239,8 @@ def main():
         eval_dataset=eval_split,
         compute_metrics=compute_metrics,
         optimizers=(optimizer, None),
-        data_collator=data_collator
+        data_collator=data_collator,
+        console_logging_steps=args.console_logging_steps
     )
 
     trainer.train()
@@ -237,6 +253,8 @@ def main():
     for k, v in metrics.items():
         print(f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}")
 
+    if args.report_to == "wandb":
+        wandb.config.update(vars(args))
 
 if __name__ == "__main__":
     main()
