@@ -4,6 +4,20 @@ Fine-tune any HuggingFace transformer model for text classification using a simp
 
 ---
 
+## Motivation
+This repository is created to explore the proper way to fine tune a text classification in various scenarios: binary classification, binary classification with imbalanced data and multi-class classification.
+
+Most guide to fine tuning text classification nowadays usually just apply a randomly initialized linear layer on top of a pre-trained language model then fine tune all layers with the same learning rate. (E.g. https://huggingface.co/docs/transformers/en/tasks/sequence_classification). Inspired by this [blog](https://lalatenduswain.medium.com/fine-tuning-pre-trained-models-the-right-way-a-step-by-step-guide-to-learning-rate-strategy-b3d9c0307222), I want to investigate the effect of better hypeparameter tuning, especially the **freeze and unfreeze backbone method** and **differential learning rate** on the performance on various text classification tasks. Experiments will be keep tracked in [experiments.md](experiments.md).
+
+Datasets planned to be used as experiments:
+- [IMDB review dataset](https://huggingface.co/datasets/stanfordnlp/imdb)
+- [UCI SMS Spam Collection](https://huggingface.co/datasets/ucirvine/sms_spam)
+- [TREC Question Classification](https://www.kaggle.com/datasets/thedevastator/the-trec-question-classification-dataset-a-longi)
+
+
+
+---
+> The following section was generated with AI assistance.
 ## Requirements
 
 ```bash
