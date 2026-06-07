@@ -31,7 +31,8 @@ from transformers import (
     AutoModelForSequenceClassification,
     DataCollatorWithPadding,
     TrainingArguments,
-    Trainer
+    Trainer,
+    set_seed
 )
 
 
@@ -79,6 +80,8 @@ def parse_args():
                    help="Warmup steps (default: 0)")
     p.add_argument("--freeze_backbone", action="store_true",
                    help="Freeze all backbone weights and train only the classification head")
+    p.add_argument("--seed", type=int, default=0,
+                   help="Random seed for reproducibility (default: 0)")
 
     # Output and logging
     p.add_argument("--output_dir", default="./results",
@@ -148,6 +151,8 @@ def freeze_backbone(model) -> int:
 
 def main():
     args = parse_args()
+    set_seed(args.seed)
+
     if args.report_to == "wandb":
         if args.wandb_project:
             os.environ["WANDB_PROJECT"] = args.wandb_project
@@ -213,7 +218,8 @@ def main():
         run_name=args.run_name,
         report_to=args.report_to,
         lr_scheduler_type="cosine",
-        warmup_steps=args.warmup_steps
+        warmup_steps=args.warmup_steps,
+        seed=args.seed,
     )
     
     trainer = CustomTrainer(
