@@ -8,7 +8,8 @@ python train_classifier.py \
     --train_file train.csv \
     --val_file val.csv \
     --text_col review \
-    --num_labels 5
+    --num_labels 5 \
+    --metric_for_best_model f1
 
 # Freeze the backbone (only train the classification head)
 python train_classifier.py \
@@ -25,7 +26,7 @@ import numpy as np
 import torch
 import wandb
 from datasets import load_dataset
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from transformers import (
     AutoTokenizer,
     AutoModelForSequenceClassification,
@@ -99,6 +100,10 @@ def parse_args():
     p.add_argument("--save_total_limit", type=int, default=3,
                    help="Total number of checkpoints to save (default: 3)")
     
+    # Evaluation metric setting
+    p.add_argument("--metric_for_best_model", default="accuracy", type=str,
+                   help="Metric used to select the best model (options: accuracy, precision, recall, f1) (default: accuracy)")
+    
     # Wandb setting
     p.add_argument("--run_name", default=None,
                    help="Experiment/run name for the logger (e.g., W&B)")
@@ -162,6 +167,7 @@ def main():
     print(f"  Labels     : {args.num_labels}")
     print(f"  Epochs     : {args.epochs}")
     print(f"  Freeze backbone: {args.freeze_backbone}")
+    print(f"  Best metric: {args.metric_for_best_model}")
     print(f"  Output dir : {args.output_dir}")
     print(f"{'='*60}\n")
 
@@ -197,8 +203,17 @@ def main():
 
     def compute_metrics(eval_pred):
         logits, labels = eval_pred
-        predictions = np.argmax(logits, axis=-1)
-        return {"accuracy": accuracy_score(labels, predictions)}
+        predictions = np.argmax(logits, axis=-1)        
+        precision, recall, f1, _ = precision_recall_fscore_support(
+            labels, predictions, average="weighted", zero_division=0
+        )
+        
+        return {
+            "accuracy": accuracy_score(labels, predictions),
+            "precision": precision,
+            "recall": recall,
+            "f1": f1
+        }
 
     training_args = TrainingArguments(
         output_dir=args.output_dir,
@@ -211,7 +226,8 @@ def main():
         save_steps=args.save_steps,
         save_total_limit=args.save_total_limit,
         load_best_model_at_end=True,
-        metric_for_best_model="accuracy",
+        metric_for_best_model=args.metric_for_best_model,
+        greater_is_better=True,
         logging_dir=args.logging_dir,
         logging_steps=args.logging_steps,
         fp16=torch.cuda.is_available(),
