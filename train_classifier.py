@@ -161,6 +161,7 @@ def main():
     if args.report_to == "wandb":
         if args.wandb_project:
             os.environ["WANDB_PROJECT"] = args.wandb_project
+            wandb.init(project=args.wandb_project, name=args.run_name, config=vars(args))
 
     print(f"\n{'='*60}")
     print(f"  Model      : {args.model}")
@@ -258,8 +259,6 @@ def main():
     for k, v in metrics.items():
         print(f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}")
 
-    if args.report_to == "wandb":
-        wandb.config.update(vars(args), allow_val_change=True)
 
 if __name__ == "__main__":
     main()
