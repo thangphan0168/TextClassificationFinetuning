@@ -77,6 +77,8 @@ def parse_args():
                    help="Learning rate for backbone (default: 1e-5); ignored when --freeze_backbone is set")
     p.add_argument("--head_lr", type=float, default=5e-5,
                    help="Learning rate for classification head (default: 5e-5)")
+    p.add_argument("--head_lr_multiplier", type=float, default=None,
+                   help="Multiplier for backbone_lr to get head_lr. Overrides head_lr if passed.")
     p.add_argument("--warmup_steps", type=int, default=0,
                    help="Warmup steps (default: 0)")
     p.add_argument("--freeze_backbone", action="store_true",
@@ -157,6 +159,9 @@ def freeze_backbone(model) -> int:
 def main():
     args = parse_args()
     set_seed(args.seed)
+
+    if args.head_lr_multiplier is not None:
+        args.head_lr = args.backbone_lr * args.head_lr_multiplier
 
     if args.report_to == "wandb":
         if args.wandb_project:
