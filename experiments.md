@@ -18,13 +18,19 @@ Two initialization strategies are compared, each swept across the same LR combin
 | Pretrained | 1e-4 | 1e-4 | 0.9234 |
 | Pretrained | 5e-5 | 1e-4 | 0.9277 |
 | Pretrained | 2e-5 | 1e-4 | **0.9304** |
+| Pretrained | 1e-5 | 1e-4 | 0.9271 |
 | Pretrained | 5e-5 | 5e-5 | 0.9282 |
+| Pretrained | 2e-5 | 5e-5 | 0.9302 |
 | Pretrained | 1e-5 | 5e-5 | 0.9282 |
+| Pretrained | 2e-5 | 2e-5 | 0.9298 |
 | From warmed up | 1e-4 | 1e-4 | 0.9253 |
 | From warmed up | 5e-5 | 1e-4 | 0.9311 |
 | From warmed up | 2e-5 | 1e-4 | 0.9307 |
+| From warmed up | 1e-5 | 1e-4 | 0.9277 |
 | From warmed up | 5e-5 | 5e-5 | **0.9321** |
+| From warmed up | 2e-5 | 5e-5 | 0.9316 |
 | From warmed up | 1e-5 | 5e-5 | 0.9278 |
+| From warmed up | 2e-5 | 2e-5 | 0.9312 |
 
 ### Observations
 
