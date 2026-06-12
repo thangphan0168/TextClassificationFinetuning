@@ -211,7 +211,7 @@ def main():
         logits, labels = eval_pred
         predictions = np.argmax(logits, axis=-1)        
         precision, recall, f1, _ = precision_recall_fscore_support(
-            labels, predictions, average="weighted", zero_division=0
+            labels, predictions, average="macro", zero_division=0
         )
         
         return {
