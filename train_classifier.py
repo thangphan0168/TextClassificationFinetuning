@@ -20,13 +20,14 @@ python train_classifier.py \
 
 import argparse
 import os
-import logging
 
 import numpy as np
 import torch
+import torch.nn as nn
 import wandb
 from datasets import load_dataset
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+from sklearn.utils.class_weight import compute_class_weight
 from transformers import (
     AutoTokenizer,
     AutoModelForSequenceClassification,
@@ -67,6 +68,10 @@ def parse_args():
                    help="Max token length (default: 512)")
 
     # Training hyperparameters
+    p.add_argument("--use_weighted_loss", action="store_true",
+                   help="Enable dynamically calculated class weights for CrossEntropy loss")
+    p.add_argument("--weight_power", type=float, default=1.0,
+                   help="Power parameter for class weights default: 1.0)")
     p.add_argument("--epochs", type=int, default=3,
                    help="Number of training epochs (default: 3)")
     p.add_argument("--train_batch_size", type=int, default=8,
@@ -147,6 +152,34 @@ class CustomTrainer(Trainer):
         super().log(logs, start_time=start_time)
 
 
+def get_weighted_loss_func(class_weights):
+    def custom_loss_func(outputs, labels, num_items_in_batch=None):
+        logits = outputs.logits
+        
+        # Move weights to the same device as the logits dynamically
+        weights = class_weights.to(logits.device)
+        
+        loss_fct = nn.CrossEntropyLoss(weight=weights)
+        loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
+        
+        return loss
+
+    return custom_loss_func
+
+
+def get_class_weights(labels, power=1.0):
+    unique_classes = np.unique(labels)
+    weights_array = compute_class_weight(
+        class_weight="balanced", 
+        classes=unique_classes, 
+        y=labels
+    )
+    if power != 1.0:
+        weights_array = weights_array ** power
+        
+    return torch.tensor(weights_array, dtype=torch.float)
+
+
 def freeze_backbone(model) -> int:
     """Freeze all backbone parameters and return the count of frozen params."""
     frozen = 0
@@ -183,6 +216,14 @@ def main():
         data_files["validation"] = args.val_file
     dataset = load_dataset(args.file_type, data_files=data_files)
     print(f"Splits available: {list(dataset.keys())}\n")
+
+    if args.use_weighted_loss:
+        train_labels = dataset["train"][args.label_col]
+        class_weights_tensor = get_class_weights(train_labels, power=args.weight_power)
+        print(f"Using Weighted Loss (power={args.weight_power}): {class_weights_tensor}")
+        loss_func = get_weighted_loss_func(class_weights_tensor)
+    else:
+        loss_func = None
 
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     train_split = TextDataset(dataset["train"], tokenizer, args.text_col, args.label_col, args.max_length)
@@ -252,6 +293,7 @@ def main():
         compute_metrics=compute_metrics,
         optimizers=(optimizer, None),
         data_collator=data_collator,
+        compute_loss_func=loss_func,
     )
 
     trainer.train()
