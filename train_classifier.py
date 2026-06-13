@@ -1,25 +1,31 @@
 """
-Fine-tune a text classifier with HuggingFace Transformers.
+Fine-tune a text classifier with HuggingFace Transformers using Stratified K-Fold.
 
 Usage
 -----
-# CSV dataset
+# Standard Train/Val Split (Weighted Loss enabled)
 python train_classifier.py \
     --train_file train.csv \
     --val_file val.csv \
+    --use_weighted_loss \
+    --weight_power 0.5 \
     --text_col review \
     --num_labels 5 \
     --metric_for_best_model f1
 
-# Freeze the backbone (only train the classification head)
+# 5-Fold Stratified Cross-Validation (Uses ONLY train_file)
 python train_classifier.py \
-    --train_file train.csv \
-    --val_file val.csv \
-    --freeze_backbone
+    --train_file full_dataset.csv \
+    --k_folds 5 \
+    --use_weighted_loss \
+    --text_col review \
+    --num_labels 5 \
+    --metric_for_best_model f1
 """
 
 import argparse
 import os
+import gc
 
 import numpy as np
 import torch
@@ -27,6 +33,7 @@ import torch.nn as nn
 import wandb
 from datasets import load_dataset
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+from sklearn.model_selection import StratifiedKFold
 from sklearn.utils.class_weight import compute_class_weight
 from transformers import (
     AutoTokenizer,
@@ -49,11 +56,15 @@ def parse_args():
 
     # Dataset
     p.add_argument("--train_file", default=None, required=True,
-                   help="Path to a local training file")
-    p.add_argument("--val_file", default=None, required=True,
-                   help="Path to a local validation file")
+                   help="Path to a local training file (or full dataset if doing k-fold)")
+    p.add_argument("--val_file", default=None, required=False,
+                   help="Path to a local validation file (Ignored if k_folds > 1)")
     p.add_argument("--file_type", default="csv", required=False,
                    help="File type: csv | parquet (default: csv)")
+                   
+    # K-Fold Argument
+    p.add_argument("--k_folds", type=int, default=1,
+                   help="Number of folds for stratified cross-validation (default: 1, standard train/val split)")
 
     # Columns
     p.add_argument("--text_col", default="text",
@@ -71,7 +82,7 @@ def parse_args():
     p.add_argument("--use_weighted_loss", action="store_true",
                    help="Enable dynamically calculated class weights for CrossEntropy loss")
     p.add_argument("--weight_power", type=float, default=1.0,
-                   help="Power parameter for class weights default: 1.0)")
+                   help="Power parameter for class weights (default: 1.0)")
     p.add_argument("--epochs", type=int, default=3,
                    help="Number of training epochs (default: 3)")
     p.add_argument("--train_batch_size", type=int, default=8,
@@ -94,8 +105,6 @@ def parse_args():
     # Output and logging
     p.add_argument("--output_dir", default="./results",
                    help="Directory to save the model (default: ./results)")
-    p.add_argument("--logging_dir", default="./logs",
-                   help="Directory for training logs (default: ./logs)")
     p.add_argument("--logging_steps", type=int, default=1,
                    help="Log every N steps (default: 1)")
     p.add_argument("--report_to", default="none",
@@ -155,15 +164,10 @@ class CustomTrainer(Trainer):
 def get_weighted_loss_func(class_weights):
     def custom_loss_func(outputs, labels, num_items_in_batch=None):
         logits = outputs.logits
-        
-        # Move weights to the same device as the logits dynamically
         weights = class_weights.to(logits.device)
-        
         loss_fct = nn.CrossEntropyLoss(weight=weights)
         loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
-        
         return loss
-
     return custom_loss_func
 
 
@@ -176,7 +180,6 @@ def get_class_weights(labels, power=1.0):
     )
     if power != 1.0:
         weights_array = weights_array ** power
-        
     return torch.tensor(weights_array, dtype=torch.float)
 
 
@@ -189,81 +192,57 @@ def freeze_backbone(model) -> int:
     return frozen
 
 
-def main():
-    args = parse_args()
-    set_seed(args.seed)
+def compute_metrics(eval_pred):
+    logits, labels = eval_pred
+    predictions = np.argmax(logits, axis=-1)        
+    precision, recall, f1, _ = precision_recall_fscore_support(
+        labels, predictions, average="macro", zero_division=0
+    )
+    return {
+        "accuracy": accuracy_score(labels, predictions),
+        "precision": precision,
+        "recall": recall,
+        "f1": f1
+    }
 
-    if args.head_lr_multiplier is not None:
-        args.head_lr = args.backbone_lr * args.head_lr_multiplier
 
-    if args.report_to == "wandb":
-        if args.wandb_project:
-            os.environ["WANDB_PROJECT"] = args.wandb_project
-            wandb.init(project=args.wandb_project, name=args.run_name, config=vars(args))
+def train_evaluate_split(args, train_split, eval_split, train_labels, tokenizer, data_collator, fold=None):
+    """
+    Handles the initialization, training, and evaluation loop. 
+    Extracted so it can be re-run freshly for every fold.
+    """
+    fold_suffix = f"_fold_{fold}" if fold is not None else ""
+    out_dir = f"{args.output_dir}{fold_suffix}"
+    current_run_name = f"{args.run_name}{fold_suffix}" if args.run_name else None
 
-    print(f"\n{'='*60}")
-    print(f"  Model      : {args.model}")
-    print(f"  Labels     : {args.num_labels}")
-    print(f"  Epochs     : {args.epochs}")
-    print(f"  Freeze backbone: {args.freeze_backbone}")
-    print(f"  Best metric: {args.metric_for_best_model}")
-    print(f"  Output dir : {args.output_dir}")
-    print(f"{'='*60}\n")
-
-    print(f"Loading local CSV files: {args.train_file} / {args.val_file}")
-    data_files = {"train": args.train_file}
-    if args.val_file:
-        data_files["validation"] = args.val_file
-    dataset = load_dataset(args.file_type, data_files=data_files)
-    print(f"Splits available: {list(dataset.keys())}\n")
-
-    if args.use_weighted_loss:
-        train_labels = dataset["train"][args.label_col]
-        class_weights_tensor = get_class_weights(train_labels, power=args.weight_power)
-        print(f"Using Weighted Loss (power={args.weight_power}): {class_weights_tensor}")
-        loss_func = get_weighted_loss_func(class_weights_tensor)
-    else:
-        loss_func = None
-
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
-    train_split = TextDataset(dataset["train"], tokenizer, args.text_col, args.label_col, args.max_length)
-    eval_split  = TextDataset(dataset["validation"], tokenizer, args.text_col, args.label_col, args.max_length)
-    data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
+    if args.report_to == "wandb" and args.wandb_project:
+        wandb.init(project=args.wandb_project, name=current_run_name, config=vars(args), reinit=True)
 
     model = AutoModelForSequenceClassification.from_pretrained(
         args.model,
         num_labels=args.num_labels,
     )
 
+    loss_func = None
+    if args.use_weighted_loss:
+        class_weights_tensor = get_class_weights(train_labels, power=args.weight_power)
+        if fold is None or fold == 1:
+            print(f"Using Weighted Loss (power={args.weight_power}): {class_weights_tensor}")
+        loss_func = get_weighted_loss_func(class_weights_tensor)
+
     if args.freeze_backbone:
         frozen_count = freeze_backbone(model)
-        print(f"Backbone frozen: {frozen_count:,} parameters will not be updated.\n")
-        optimizer = torch.optim.AdamW(
-            model.classifier.parameters(),
-            lr=args.head_lr,
-        )
+        if fold is None or fold == 1:
+            print(f"Backbone frozen: {frozen_count:,} parameters will not be updated.\n")
+        optimizer = torch.optim.AdamW(model.classifier.parameters(), lr=args.head_lr)
     else:
         optimizer = torch.optim.AdamW([
             {"params": model.classifier.parameters(), "lr": args.head_lr},
             {"params": model.base_model.parameters(), "lr": args.backbone_lr},
         ])
 
-    def compute_metrics(eval_pred):
-        logits, labels = eval_pred
-        predictions = np.argmax(logits, axis=-1)        
-        precision, recall, f1, _ = precision_recall_fscore_support(
-            labels, predictions, average="macro", zero_division=0
-        )
-        
-        return {
-            "accuracy": accuracy_score(labels, predictions),
-            "precision": precision,
-            "recall": recall,
-            "f1": f1
-        }
-
     training_args = TrainingArguments(
-        output_dir=args.output_dir,
+        output_dir=out_dir,
         eval_strategy="steps",
         save_strategy="steps",
         num_train_epochs=args.epochs,
@@ -275,16 +254,15 @@ def main():
         load_best_model_at_end=True,
         metric_for_best_model=args.metric_for_best_model,
         greater_is_better=True,
-        logging_dir=args.logging_dir,
         logging_steps=args.logging_steps,
         fp16=torch.cuda.is_available(),
-        run_name=args.run_name,
+        run_name=current_run_name,
         report_to=args.report_to,
         lr_scheduler_type="cosine",
         warmup_steps=args.warmup_steps,
         seed=args.seed,
     )
-    
+
     trainer = CustomTrainer(
         model=model,
         args=training_args,
@@ -297,15 +275,111 @@ def main():
     )
 
     trainer.train()
-    trainer.save_model(args.output_dir)
-    tokenizer.save_pretrained(args.output_dir)
-    print(f"\nModel saved to: {args.output_dir}")
-
+    trainer.save_model(out_dir)
+    tokenizer.save_pretrained(out_dir)
+    
     metrics = trainer.evaluate()
-    print("\nFinal eval metrics:")
-    for k, v in metrics.items():
-        print(f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}")
+    if args.report_to == "wandb":
+        wandb.finish()
+        
+    del model, trainer, optimizer, loss_func
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        
+    return metrics
 
+
+def main():
+    args = parse_args()
+    set_seed(args.seed)
+
+    if args.head_lr_multiplier is not None:
+        args.head_lr = args.backbone_lr * args.head_lr_multiplier
+
+    if args.k_folds <= 1 and not args.val_file:
+        raise ValueError("You must provide --val_file if --k_folds is set to 1.")
+
+    if args.report_to == "wandb" and args.wandb_project:
+        os.environ["WANDB_PROJECT"] = args.wandb_project
+
+    print(f"\n{'='*60}")
+    print(f"  Model      : {args.model}")
+    print(f"  Labels     : {args.num_labels}")
+    print(f"  Epochs     : {args.epochs}")
+    print(f"  K-Folds    : {args.k_folds}")
+    print(f"  Use weights: {args.use_weighted_loss} (power: {args.weight_power})")
+    print(f"  Freeze backbone: {args.freeze_backbone}")
+    print(f"  Best metric: {args.metric_for_best_model}")
+    print(f"  Output dir : {args.output_dir}")
+    print(f"{'='*60}\n")
+
+    # Load Data
+    data_files = {"train": args.train_file}
+    if args.val_file and args.k_folds <= 1:
+        data_files["validation"] = args.val_file
+        
+    print(f"Loading files: {data_files}")
+    dataset = load_dataset(args.file_type, data_files=data_files)
+    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
+
+    if args.k_folds > 1:
+        print(f"Initializing {args.k_folds}-Fold Stratified Cross Validation...\n")
+        full_data = dataset["train"]
+        labels = full_data[args.label_col]
+        
+        skf = StratifiedKFold(n_splits=args.k_folds, shuffle=True, random_state=args.seed)
+        fold_metrics = []
+        
+        for fold, (train_idx, val_idx) in enumerate(skf.split(np.zeros(len(labels)), labels), start=1):
+            print(f"\n{'*'*40}")
+            print(f"   STARTING FOLD {fold}/{args.k_folds}")
+            print(f"{'*'*40}")
+            
+            train_subset = full_data.select(train_idx)
+            val_subset = full_data.select(val_idx)
+            fold_train_labels = train_subset[args.label_col]
+            
+            train_split = TextDataset(train_subset, tokenizer, args.text_col, args.label_col, args.max_length)
+            eval_split  = TextDataset(val_subset, tokenizer, args.text_col, args.label_col, args.max_length)
+            
+            metrics = train_evaluate_split(
+                args, train_split, eval_split, fold_train_labels, tokenizer, data_collator, fold=fold
+            )
+            fold_metrics.append(metrics)
+            
+            print(f"\nFold {fold} Results:")
+            for k, v in metrics.items():
+                if k.startswith("eval_"):
+                    print(f"  {k}: {v:.4f}")
+
+        # Aggregate results
+        print(f"\n{'='*60}")
+        print(f"FINAL AGGREGATED METRICS ACROSS {args.k_folds} FOLDS:")
+        print(f"{'='*60}")
+        metric_keys = [k for k in fold_metrics[0].keys() if k.startswith("eval_")]
+        
+        for key in metric_keys:
+            values = [m[key] for m in fold_metrics]
+            mean_val = np.mean(values)
+            std_val = np.std(values)
+            print(f"  {key}: {mean_val:.4f} (± {std_val:.4f})")
+
+    else:
+        print("Running standard single Train/Validation split...\n")
+        train_labels = dataset["train"][args.label_col]
+        train_split = TextDataset(dataset["train"], tokenizer, args.text_col, args.label_col, args.max_length)
+        eval_split  = TextDataset(dataset["validation"], tokenizer, args.text_col, args.label_col, args.max_length)
+        
+        metrics = train_evaluate_split(
+            args, train_split, eval_split, train_labels, tokenizer, data_collator, fold=None
+        )
+        
+        print("\nFinal eval metrics:")
+        for k, v in metrics.items():
+            if k.startswith("eval_"):
+                print(f"  {k}: {v:.4f}")
 
 if __name__ == "__main__":
     main()
