@@ -11,10 +11,8 @@ Most guide to fine tuning text classification nowadays usually just apply a rand
 
 Datasets planned to be used as experiments:
 - [IMDB review dataset](https://huggingface.co/datasets/stanfordnlp/imdb)
-- [UCI SMS Spam Collection](https://huggingface.co/datasets/ucirvine/sms_spam)
-- [TREC Question Classification](https://www.kaggle.com/datasets/thedevastator/the-trec-question-classification-dataset-a-longi)
-
-
+- [Email spam dataset](https://www.kaggle.com/datasets/venky73/spam-mails-dataset)
+- [20K News Groups](https://huggingface.co/datasets/SetFit/20_newsgroups)
 
 ---
 > The following section was generated with AI assistance.
