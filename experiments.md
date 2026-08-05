@@ -11,7 +11,7 @@
 Two initialization strategies are compared, each swept across the same LR combinations:
 
 - **From pretrained**: standard fine-tuning initialized directly from the HuggingFace pretrained checkpoint, all parameters unfrozen from step 1.
-- **From warmed up**: the classifier head was first trained with the backbone frozen for 2 epochs (with learning rate 1e-4); the resulting checkpoint is then used as the starting point for full fine-tuning (backbone + head, all parameters unfrozen).
+- **From warmed up**: the classifier head was first trained with the backbone frozen for 2 epochs (with learning rate 1e-4); the resulting checkpoint is then used as the starting point for full fine-tuning (backbone + head, all parameters unfrozen). This checkpoint achieved an accuracy of 0.7728.
 
 | Init | Backbone LR | Head LR | Run 1 Accuracy | Run 2 Accuracy | Run 3 Accuracy | Average |
 |---|---|---|---|---|---|---|
