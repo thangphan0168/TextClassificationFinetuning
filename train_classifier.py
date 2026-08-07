@@ -36,6 +36,7 @@ from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from sklearn.model_selection import StratifiedKFold
 from sklearn.utils.class_weight import compute_class_weight
 from transformers import (
+    AutoConfig,
     AutoTokenizer,
     AutoModelForSequenceClassification,
     DataCollatorWithPadding,
@@ -218,10 +219,15 @@ def train_evaluate_split(args, train_split, eval_split, train_labels, tokenizer,
     if args.report_to == "wandb" and args.wandb_project:
         wandb.init(project=args.wandb_project, name=current_run_name, config=vars(args), reinit=True)
 
-    model = AutoModelForSequenceClassification.from_pretrained(
-        args.model,
-        num_labels=args.num_labels,
-    )
+    # model = AutoModelForSequenceClassification.from_pretrained(
+    #     args.model,
+    #     num_labels=args.num_labels,
+    # )
+    config = AutoConfig.from_pretrained(args.model, num_labels=args.num_labels)
+    if args.freeze_backbone:
+        config.dropout = 0.0
+        config.attention_dropout = 0.0
+    model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=args.num_labels, config=config)
 
     loss_func = None
     if args.use_weighted_loss:
