@@ -227,7 +227,7 @@ def train_evaluate_split(args, train_split, eval_split, train_labels, tokenizer,
     if args.freeze_backbone:
         config.dropout = 0.0
         config.attention_dropout = 0.0
-    model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=args.num_labels, config=config)
+    model = AutoModelForSequenceClassification.from_pretrained(args.model, config=config)
 
     loss_func = None
     if args.use_weighted_loss:
