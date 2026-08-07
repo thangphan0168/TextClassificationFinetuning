@@ -96,6 +96,8 @@ def parse_args():
                    help="Learning rate for classification head (default: 5e-5)")
     p.add_argument("--head_lr_multiplier", type=float, default=None,
                    help="Multiplier for backbone_lr to get head_lr. Overrides head_lr if passed.")
+    p.add_argument("--lr_scheduler", type=str, default="constant",
+                   help="Learning rate scheduler.")
     p.add_argument("--warmup_steps", type=int, default=0,
                    help="Warmup steps (default: 0)")
     p.add_argument("--freeze_backbone", action="store_true",
@@ -264,7 +266,7 @@ def train_evaluate_split(args, train_split, eval_split, train_labels, tokenizer,
         fp16=torch.cuda.is_available(),
         run_name=current_run_name,
         report_to=args.report_to,
-        lr_scheduler_type="cosine",
+        lr_scheduler_type=args.lr_scheduler,
         warmup_steps=args.warmup_steps,
         seed=args.seed,
     )
